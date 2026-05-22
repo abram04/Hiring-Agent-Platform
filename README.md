@@ -67,25 +67,21 @@ hiring_agent/
 - Google AI API Key (from https://aistudio.google.com/apikey)
 - LangSmith API Key (from https://smith.langchain.com) — optional, for monitoring
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/yourusername/hiring-agent.git
-cd hiring-agent
-```
 
-### 2. Create virtual environment
+
+### 1. Create virtual environment
 ```bash
 python -m venv venv
 venv\Scripts\activate  # Windows
 source venv/bin/activate  # Mac/Linux
 ```
 
-### 3. Install dependencies
+### 2. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure environment variables
+### 3. Configure environment variables
 ```bash
 cp .env.example .env
 ```
@@ -99,17 +95,17 @@ LANGCHAIN_API_KEY=your_langsmith_api_key
 LANGCHAIN_PROJECT=hiring-agent
 ```
 
-### 5. Start PostgreSQL + pgvector with Docker
+### 4. Start PostgreSQL + pgvector with Docker
 ```bash
 docker run -d --name hiring_agent_db \
-  -e POSTGRES_USER=hiring_user \
-  -e POSTGRES_PASSWORD=hiring_pass \
-  -e POSTGRES_DB=hiring_agent \
+  -e POSTGRES_USER=r \
+  -e POSTGRES_PASSWORD= \
+  -e POSTGRES_DB=\
   -p 5432:5432 \
   pgvector/pgvector:0.8.2-pg18-trixie
 ```
 
-### 6. Initialize the database
+### 5 Initialize the database
 Run the SQL schema in DBeaver or psql:
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -136,12 +132,12 @@ CREATE TABLE candidates (
 );
 ```
 
-### 7. Run the server
+### 6. Run the server
 ```bash
 python main.py
 ```
 
-### 8. Open API documentation
+### 7. Open API documentation
 ```
 http://localhost:8000/docs
 ```
