@@ -67,25 +67,21 @@ hiring_agent/
 - Google AI API Key (dari https://aistudio.google.com/apikey)
 - LangSmith API Key (dari https://smith.langchain.com) — opsional, untuk monitoring
 
-### 1. Clone repository
-```bash
-git clone https://github.com/yourusername/hiring-agent.git
-cd hiring-agent
-```
 
-### 2. Buat virtual environment
+
+### 1. Buat virtual environment
 ```bash
 python -m venv venv
 venv\Scripts\activate  # Windows
 source venv/bin/activate  # Mac/Linux
 ```
 
-### 3. Install dependencies
+### 2. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Konfigurasi environment variables
+### 3. Konfigurasi environment variables
 ```bash
 cp .env.example .env
 ```
@@ -99,17 +95,17 @@ LANGCHAIN_API_KEY=api_key_langsmith_kamu
 LANGCHAIN_PROJECT=hiring-agent
 ```
 
-### 5. Jalankan PostgreSQL + pgvector dengan Docker
+### 4. Jalankan PostgreSQL + pgvector dengan Docker
 ```bash
 docker run -d --name hiring_agent_db \
-  -e POSTGRES_USER=hiring_user \
-  -e POSTGRES_PASSWORD=hiring_pass \
-  -e POSTGRES_DB=hiring_agent \
+  -e POSTGRES_USER= \
+  -e POSTGRES_PASSWORD= \
+  -e POSTGRES_DB= \
   -p 5432:5432 \
   pgvector/pgvector:0.8.2-pg18-trixie
 ```
 
-### 6. Inisialisasi database
+### 5. Inisialisasi database
 Jalankan SQL schema di DBeaver atau psql:
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -136,12 +132,12 @@ CREATE TABLE candidates (
 );
 ```
 
-### 7. Jalankan server
+### 6. Jalankan server
 ```bash
 python main.py
 ```
 
-### 8. Buka dokumentasi API
+### 7. Buka dokumentasi API
 ```
 http://localhost:8000/docs
 ```
