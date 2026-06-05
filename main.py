@@ -1,5 +1,7 @@
-import asyncio
 import asyncpg
+import json
+import time
+from datetime import datetime, timezone, timedelta
 from google import genai
 from dotenv import load_dotenv
 from typing import Optional, TypedDict
@@ -45,10 +47,71 @@ class MatchResponse(BaseModel):
 class AgentState(TypedDict):
     resume_text: str
     candidate_name: str
+    candidate_id: Optional[int]
     embedding: Optional[str]
     matches: Optional[list]
     llm_analysis: Optional[str]
     error: Optional[str]
+
+
+# ── DB HELPERS ─────────────────────────────────────
+async def upsert_candidate(conn, name: str, resume_text: str, embedding_str: str) -> int:
+    existing = await conn.fetchrow(
+        "SELECT candidate_id FROM candidates WHERE name = $1", name
+    )
+    if existing:
+        await conn.execute("""
+            UPDATE candidates
+            SET resume_text = $1, embedding = $2::vector
+            WHERE candidate_id = $3
+        """, resume_text, embedding_str, existing['candidate_id'])
+        return existing['candidate_id']
+    else:
+        row = await conn.fetchrow("""
+            INSERT INTO candidates (name, resume_text, embedding, status)
+            VALUES ($1, $2, $3::vector, 'new')
+            RETURNING candidate_id
+        """, name, resume_text, embedding_str)
+        return row['candidate_id']
+
+
+async def save_run_and_matches(
+    candidate_id: int,
+    matches: list,
+    llm_analysis: str,
+    resume_text: str,
+    duration_ms: int
+) -> int:
+    conn = await asyncpg.connect(DATABASE_URL)
+
+    now = datetime.now(timezone.utc)
+    started_at = now - timedelta(milliseconds=duration_ms)
+
+    run = await conn.fetchrow("""
+        INSERT INTO agent_runs
+            (agent_name, candidate_id, status, input_data, output_data, duration_ms, started_at, completed_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING run_id
+    """,
+        'hiring_agent',
+        candidate_id,
+        'completed',
+        json.dumps({"resume_preview": resume_text[:300]}),
+        json.dumps({"match_count": len(matches), "llm_analysis": llm_analysis}),
+        duration_ms,
+        started_at,
+        now
+    )
+    run_id = run['run_id']
+
+    for rank, job in enumerate(matches, 1):
+        await conn.execute("""
+            INSERT INTO matches (candidate_id, job_id, run_id, vector_score, llm_rank, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        """, candidate_id, job.get('job_id'), run_id, float(job['similarity']), rank, now)
+
+    await conn.close()
+    return run_id
 
 
 # ── NODES ──────────────────────────────────────────
@@ -60,14 +123,22 @@ async def embed_resume(state: AgentState) -> AgentState:
     )
     embedding = response.embeddings[0].values
     embedding_str = str(list(embedding)).replace(" ", "")
-    return {**state, "embedding": embedding_str}
+
+    conn = await asyncpg.connect(DATABASE_URL)
+    candidate_id = await upsert_candidate(
+        conn, state['candidate_name'], state['resume_text'], embedding_str
+    )
+    await conn.close()
+
+    return {**state, "embedding": embedding_str, "candidate_id": candidate_id}
+
 
 async def search_jobs(state: AgentState) -> AgentState:
     conn = await asyncpg.connect(DATABASE_URL)
     embedding_str = state['embedding']
 
     results = await conn.fetch(f"""
-        SELECT title, company, location, job_type,
+        SELECT job_id, title, company, location, job_type,
                1 - (embedding <=> '{embedding_str}'::vector) AS similarity
         FROM job_listings
         WHERE embedding IS NOT NULL
@@ -78,6 +149,7 @@ async def search_jobs(state: AgentState) -> AgentState:
     matches = [dict(r) for r in results]
     await conn.close()
     return {**state, "matches": matches}
+
 
 async def llm_rerank(state: AgentState) -> AgentState:
     jobs_text = ""
@@ -143,35 +215,45 @@ async def root():
 
 @app.post("/match-jobs", response_model=MatchResponse)
 async def match_jobs(request: MatchRequest):
+    start = time.time()
     try:
         result = await agent.ainvoke({
             "candidate_name": request.candidate_name,
             "resume_text": request.resume_text,
+            "candidate_id": None,
             "embedding": None,
             "matches": None,
             "llm_analysis": None,
             "error": None
         })
 
+        duration_ms = int((time.time() - start) * 1000)
+        await save_run_and_matches(
+            result['candidate_id'],
+            result['matches'],
+            result['llm_analysis'],
+            request.resume_text,
+            duration_ms
+        )
+
         return MatchResponse(
             candidate_name=result['candidate_name'],
-            matches=[JobMatch(**m) for m in result['matches']],
+            matches=[JobMatch(**{k: v for k, v in m.items() if k != 'job_id'}) for m in result['matches']],
             llm_analysis=result['llm_analysis']
         )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/match-jobs-pdf", response_model=MatchResponse)
 async def match_jobs_pdf(
     candidate_name: str,
     file: UploadFile = File(...)
 ):
-    # Validasi file harus PDF
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File harus berformat PDF!")
 
-    # Baca dan extract teks dari PDF
     pdf_bytes = await file.read()
     pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
 
@@ -182,22 +264,29 @@ async def match_jobs_pdf(
     if not resume_text.strip():
         raise HTTPException(status_code=400, detail="PDF tidak bisa dibaca atau kosong!")
 
-    print(f"\nPDF diterima: {file.filename}")
-    print(f"Teks extracted: {resume_text[:100]}...")
-
-    # Jalankan agent
+    start = time.time()
     result = await agent.ainvoke({
         "candidate_name": candidate_name,
         "resume_text": resume_text,
+        "candidate_id": None,
         "embedding": None,
         "matches": None,
         "llm_analysis": None,
         "error": None
     })
 
+    duration_ms = int((time.time() - start) * 1000)
+    await save_run_and_matches(
+        result['candidate_id'],
+        result['matches'],
+        result['llm_analysis'],
+        resume_text,
+        duration_ms
+    )
+
     return MatchResponse(
         candidate_name=result['candidate_name'],
-        matches=[JobMatch(**m) for m in result['matches']],
+        matches=[JobMatch(**{k: v for k, v in m.items() if k != 'job_id'}) for m in result['matches']],
         llm_analysis=result['llm_analysis']
     )
 
